@@ -1,0 +1,222 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>近藤のポケット</title>
+<style>
+  :root {
+    --bg: #fff8e1; --ink: #2b2b2b; --red: #e53935; --card: #fff; --line: #e0d6b8; --accent: #fbc02d;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: "Hiragino Sans", "Yu Gothic", sans-serif; background: var(--bg); color: var(--ink); }
+  header { background: var(--red); color: #fff; padding: 14px 16px; text-align: center; }
+  header h1 { margin: 0; font-size: 20px; letter-spacing: .05em; }
+  header p { margin: 4px 0 0; font-size: 12px; opacity: .9; }
+  main { max-width: 960px; margin: 0 auto; padding: 16px; }
+  h2 { font-size: 16px; margin: 20px 0 8px; }
+
+  /* てもち（キーホルダー風） */
+  .party { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; background: var(--card);
+    border: 3px solid var(--ink); border-radius: 16px; padding: 14px; position: relative; }
+  .party::before { content: ""; position: absolute; top: -14px; left: 50%; width: 22px; height: 22px;
+    margin-left: -11px; border: 4px solid #999; border-radius: 50%; background: var(--bg); }
+  .slot { aspect-ratio: 1; border: 2px dashed var(--line); border-radius: 12px; display: flex; flex-direction: column;
+    align-items: center; justify-content: center; position: relative; background: #fffdf5; font-size: 12px; text-align: center; }
+  .slot.filled { border-style: solid; border-color: var(--accent); background: #fff; }
+  .slot.active { outline: 3px solid var(--red); }
+  .slot img { width: 80%; image-rendering: pixelated; }
+  .slot .no { position: absolute; top: 4px; left: 6px; color: #999; font-size: 11px; }
+  .slot button.rm { position: absolute; top: 2px; right: 2px; border: 0; background: none; font-size: 16px; cursor: pointer; color: #999; }
+  .slot .empty { color: #bbb; font-size: 24px; }
+  .toolbar { display: flex; gap: 8px; margin-top: 10px; }
+  button.btn { border: 2px solid var(--ink); background: #fff; border-radius: 8px; padding: 6px 12px; cursor: pointer; font-size: 13px; }
+  button.btn:hover { background: var(--accent); }
+
+  /* 検索・一覧 */
+  input[type=search] { width: 100%; padding: 10px 12px; font-size: 16px; border: 2px solid var(--ink); border-radius: 8px; }
+  .filters { display: flex; gap: 6px; flex-wrap: wrap; margin: 8px 0; }
+  .filters button { border: 1px solid var(--ink); background: #fff; border-radius: 999px; padding: 3px 10px; font-size: 12px; cursor: pointer; }
+  .filters button.on { background: var(--ink); color: #fff; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(92px, 1fr)); gap: 8px; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 6px; text-align: center;
+    cursor: pointer; font-size: 11px; }
+  .card:hover { border-color: var(--red); }
+  .card.picked { background: #ffe9a8; border-color: var(--accent); }
+  .card img { width: 72px; height: 72px; image-rendering: pixelated; }
+  .card .n { color: #999; }
+  .more { display: block; margin: 12px auto; }
+  #msg { text-align: center; color: #888; padding: 20px; }
+
+  /* 詳細ダイアログ */
+  dialog { border: 3px solid var(--ink); border-radius: 16px; max-width: 360px; width: 92%; text-align: center; }
+  dialog::backdrop { background: rgba(0,0,0,.4); }
+  dialog img.art { width: 200px; height: 200px; }
+  .types span { display: inline-block; padding: 2px 10px; margin: 2px; border-radius: 999px; background: #ddd; font-size: 12px; }
+  dialog .stats { font-size: 12px; text-align: left; margin: 8px 0; }
+  .bar { height: 6px; background: var(--accent); border-radius: 3px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>近藤のポケット</h1>
+  <p>近藤専用の、近藤に特化した、近藤限定の連れ歩きキーホルダー</p>
+</header>
+
+<main>
+  <h2>わたしのてもち</h2>
+  <div class="party" id="party"></div>
+  <div class="toolbar">
+    <button class="btn" id="clear">ぜんぶはずす</button>
+    <button class="btn" id="share">てもちをコピー</button>
+  </div>
+
+  <h2>ポケモンをさがす</h2>
+  <input type="search" id="q" placeholder="図鑑番号 / 英語名 / 日本語名（取得済みのもの）">
+  <div class="filters" id="gens"></div>
+  <div id="msg">読み込み中…</div>
+  <div class="grid" id="grid"></div>
+  <button class="btn more" id="more" hidden>もっと見る</button>
+</main>
+
+<dialog id="dlg"></dialog>
+
+<script>
+const API = "https://pokeapi.co/api/v2";
+const SPRITES = "https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon";
+const KEY = "myPokemonParty.v1";
+const PAGE = 60;
+const GENS = [["全部",1,1025],["第1世代",1,151],["第2世代",152,251],["第3世代",252,386],["第4世代",387,493],
+  ["第5世代",494,649],["第6世代",650,721],["第7世代",722,809],["第8世代",810,905],["第9世代",906,1025]];
+
+let all = [];            // {id, name}
+let party = load();      // 長さ6、IDまたはnull
+let names = {};          // id -> 日本語名キャッシュ
+let gen = 0, shown = PAGE, query = "", target = -1;
+
+const $ = s => document.querySelector(s);
+const spr = id => `${SPRITES}/${id}.png`;
+const art = id => `${SPRITES}/other/official-artwork/${id}.png`;
+const label = id => names[id] || (all[id-1] ? all[id-1].name : "#" + id);
+
+function load() {
+  try {
+    const v = JSON.parse(localStorage.getItem(KEY));
+    if (Array.isArray(v)) return Array.from({length: 6}, (_, i) => v[i] || null);
+  } catch (e) {}
+  return Array(6).fill(null);
+}
+function save() { try { localStorage.setItem(KEY, JSON.stringify(party)); } catch (e) {} }
+
+async function jaName(id) {
+  if (names[id]) return names[id];
+  try {
+    const r = await fetch(`${API}/pokemon-species/${id}`);
+    const d = await r.json();
+    const n = d.names.find(x => x.language.name === "ja-Hrkt" || x.language.name === "ja");
+    const kanji = d.names.find(x => x.language.name === "ja");
+    names[id] = (kanji || n || {name: all[id-1].name}).name;
+    localStorage.setItem("myPokemonParty.names", JSON.stringify(names));
+  } catch (e) {}
+  return label(id);
+}
+
+function renderParty() {
+  $("#party").innerHTML = party.map((id, i) => `
+    <div class="slot ${id ? "filled" : ""} ${i === target ? "active" : ""}" data-i="${i}">
+      <span class="no">${i + 1}</span>
+      ${id ? `<button class="rm" data-rm="${i}" title="はずす">×</button>
+              <img src="${spr(id)}" alt=""><div>${label(id)}</div>`
+           : `<div class="empty">＋</div>`}
+    </div>`).join("");
+  party.forEach(id => { if (id && !names[id]) jaName(id).then(renderPartyLater); });
+}
+let t; function renderPartyLater() { clearTimeout(t); t = setTimeout(() => { renderParty(); renderGrid(); }, 100); }
+
+function filtered() {
+  const [, a, b] = GENS[gen];
+  const q = query.trim().toLowerCase();
+  return all.filter(p => p.id >= a && p.id <= b &&
+    (!q || String(p.id) === q || p.name.includes(q) || (names[p.id] || "").includes(q)));
+}
+
+function renderGrid() {
+  const list = filtered();
+  $("#msg").textContent = list.length ? "" : "見つかりませんでした";
+  $("#grid").innerHTML = list.slice(0, shown).map(p => `
+    <div class="card ${party.includes(p.id) ? "picked" : ""}" data-id="${p.id}">
+      <img src="${spr(p.id)}" loading="lazy" alt="">
+      <div class="n">No.${String(p.id).padStart(4, "0")}</div>
+      <div>${names[p.id] || p.name}</div>
+    </div>`).join("");
+  $("#more").hidden = list.length <= shown;
+}
+
+async function openDetail(id) {
+  const dlg = $("#dlg");
+  dlg.innerHTML = "読み込み中…";
+  dlg.showModal();
+  try {
+    const [p, jn] = await Promise.all([fetch(`${API}/pokemon/${id}`).then(r => r.json()), jaName(id)]);
+    const inParty = party.includes(id);
+    dlg.innerHTML = `
+      <img class="art" src="${art(id)}" alt="">
+      <h3>No.${String(id).padStart(4, "0")} ${jn}</h3>
+      <div class="types">${p.types.map(t => `<span>${t.type.name}</span>`).join("")}</div>
+      <div>高さ ${p.height / 10}m / 重さ ${p.weight / 10}kg</div>
+      <div class="stats">${p.stats.map(s => `${s.stat.name} ${s.base_stat}
+        <div class="bar" style="width:${Math.min(100, s.base_stat / 2)}%"></div>`).join("")}</div>
+      <div class="toolbar" style="justify-content:center">
+        <button class="btn" id="add" ${inParty ? "disabled" : ""}>${inParty ? "てもち入り済み" : "てもちに入れる"}</button>
+        <button class="btn" id="close">とじる</button>
+      </div>`;
+    $("#close").onclick = () => dlg.close();
+    $("#add").onclick = () => { addToParty(id); dlg.close(); };
+  } catch (e) {
+    dlg.innerHTML = `取得に失敗しました<br><button class="btn" onclick="this.closest('dialog').close()">とじる</button>`;
+  }
+}
+
+function addToParty(id) {
+  if (party.includes(id)) return;
+  let i = target >= 0 ? target : party.indexOf(null);
+  if (i < 0) { alert("てもちがいっぱいです。×で1匹はずしてください。"); return; }
+  party[i] = id; target = -1;
+  save(); renderParty(); renderGrid();
+}
+
+// ---- events ----
+$("#party").addEventListener("click", e => {
+  const rm = e.target.closest("[data-rm]");
+  if (rm) { party[+rm.dataset.rm] = null; save(); renderParty(); renderGrid(); return; }
+  const s = e.target.closest(".slot");
+  if (s) { const i = +s.dataset.i; target = target === i ? -1 : i; renderParty(); }
+});
+$("#grid").addEventListener("click", e => {
+  const c = e.target.closest(".card"); if (c) openDetail(+c.dataset.id);
+});
+$("#q").addEventListener("input", e => { query = e.target.value; shown = PAGE; renderGrid(); });
+$("#more").onclick = () => { shown += PAGE; renderGrid(); };
+$("#clear").onclick = () => { if (confirm("てもちをすべてはずしますか？")) { party.fill(null); save(); renderParty(); renderGrid(); } };
+$("#share").onclick = async () => {
+  const text = "近藤のポケット: " + party.map(id => id ? label(id) : "-").join(" / ");
+  try { await navigator.clipboard.writeText(text); alert("コピーしました\n" + text); } catch (e) { prompt("コピーしてね", text); }
+};
+$("#gens").innerHTML = GENS.map((g, i) => `<button data-g="${i}" class="${i === 0 ? "on" : ""}">${g[0]}</button>`).join("");
+$("#gens").addEventListener("click", e => {
+  const b = e.target.closest("button"); if (!b) return;
+  gen = +b.dataset.g; shown = PAGE;
+  document.querySelectorAll("#gens button").forEach(x => x.classList.toggle("on", x === b));
+  renderGrid();
+});
+
+// ---- init ----
+try { names = JSON.parse(localStorage.getItem("myPokemonParty.names")) || {}; } catch (e) {}
+renderParty();
+fetch(`${API}/pokemon?limit=1025`).then(r => r.json()).then(d => {
+  all = d.results.map((p, i) => ({id: i + 1, name: p.name}));
+  renderParty(); renderGrid();
+}).catch(() => { $("#msg").textContent = "PokéAPIの取得に失敗しました。再読み込みしてください。"; });
+</script>
+</body>
+</html>
